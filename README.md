@@ -21,6 +21,8 @@ cd go-mail-reader
 go build -o go-mail-reader main.go
 ```
 
+Now rename .env.example with proper values
+
 ---
 
 ## ⚡ Usage
@@ -31,13 +33,7 @@ go build -o go-mail-reader main.go
 
 #### Common Flags
 
-- `--server`   : IMAP server address
-- `--user`     : Email address
-- `--password` : Email password or app password
-- `--folder`   : Mailbox folder (default: INBOX)
-- `--since`    : Fetch emails since date (YYYY-MM-DD)
-- `--format`   : Output format (`text` or `json`)
-
+- `-chunk-size`   : Chunk size to read
 ---
 
 ## 🤝 Contributing
