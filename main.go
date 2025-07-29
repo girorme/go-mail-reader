@@ -1,13 +1,16 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/BrianLeishman/go-imap"
+	"github.com/fatih/color"
 	"github.com/joho/godotenv"
 )
 
@@ -42,8 +45,41 @@ func initImap() {
 	imap.RetryCount = 3
 }
 
+func readMails(im *imap.Dialer, uids []int) {
+	emails, err := im.GetEmails(uids...)
+	if err != nil {
+		log.Fatalf("[-] Error getting emails: %v", err)
+	}
+
+	if len(emails) == 0 {
+		fmt.Printf("[-] No emails to read on INBOX\n")
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	color.Green("[+] Reading async a email chunk of %d UIDs\n", len(emails))
+
+	for _, email := range emails {
+		wg.Add(1)
+
+		go func(email *imap.Email) {
+			defer wg.Done()
+
+			color.Cyan("[+] Reading email: %s", email.Subject)
+
+			if err := im.MarkSeen(email.UID); err != nil {
+				log.Fatalf("Error marking email as seen: %v", err)
+			}
+		}(email)
+	}
+
+	wg.Wait()
+}
+
 func main() {
 	fmt.Println("Go mail reader")
+	color.Cyan("You can use -chunk-size <size> to change the size of email chunks to be read")
 	fmt.Println("[+] Getting envs and preparing connection")
 
 	initImap()
@@ -78,24 +114,10 @@ func main() {
 		log.Fatalf("Error getting uids: %v", err)
 	}
 
-	for uidChunk := range slices.Chunk(uids, 5) {
-		fmt.Printf("[+] Reading %d chunk of emails\n", len(uidChunk))
+	chunkSize := flag.Int("chunk-size", 10, "Size of email chunks to process")
+	flag.Parse()
 
-		emails, err := im.GetEmails(uidChunk...)
-		if err != nil {
-			log.Fatalf("[-] Error getting emails: %v", err)
-		}
-
-		if len(emails) == 0 {
-			fmt.Printf("[-] No emails to read on INBOX\n")
-			return
-		}
-
-		for _, email := range emails {
-			fmt.Printf("[+] Reading email with UID: %d\n", email.UID)
-			if err := im.MarkSeen(email.UID); err != nil {
-				log.Fatalf("Error marking email as seen: %v", err)
-			}
-		}
+	for uidChunk := range slices.Chunk(uids, *chunkSize) {
+		readMails(im, uidChunk)
 	}
 }
