@@ -57,8 +57,9 @@ func readMails(im *imap.Dialer, uids []int) {
 	}
 
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 
-	color.Green("[+] Reading async a email chunk of %d UIDs\n", len(emails))
+	color.Green("[+] Reading an email chunk of %d UIDs\n", len(emails))
 
 	for _, email := range emails {
 		wg.Add(1)
@@ -68,9 +69,11 @@ func readMails(im *imap.Dialer, uids []int) {
 
 			color.Cyan("[+] Reading email: %s", email.Subject)
 
+			mu.Lock()
 			if err := im.MarkSeen(email.UID); err != nil {
 				log.Fatalf("Error marking email as seen: %v", err)
 			}
+			mu.Unlock()
 		}(email)
 	}
 
@@ -101,6 +104,8 @@ func main() {
 		log.Fatalf("[-] Error creating imap client: %v", err)
 	}
 
+	im.ReadOnly = true
+
 	defer im.Close()
 
 	fmt.Printf("[+] Selecting folder: INBOX\n")
@@ -112,6 +117,11 @@ func main() {
 	uids, err := im.GetUIDs("UNSEEN")
 	if err != nil {
 		log.Fatalf("Error getting uids: %v", err)
+	}
+
+	if len(uids) == 0 {
+		color.Yellow("[+] No unseen emails found\n")
+		os.Exit(0)
 	}
 
 	chunkSize := flag.Int("chunk-size", 10, "Size of email chunks to process")
