@@ -51,11 +51,6 @@ func readMails(im *imap.Dialer, uids []int) {
 		log.Fatalf("[-] Error getting emails: %v", err)
 	}
 
-	if len(emails) == 0 {
-		fmt.Printf("[-] No emails to read on INBOX\n")
-		return
-	}
-
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
