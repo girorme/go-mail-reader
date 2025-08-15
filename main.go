@@ -29,7 +29,7 @@ func getCredentials() (Credentials, error) {
 
 	port, err := strconv.Atoi(os.Getenv("IMAP_PORT"))
 	if err != nil {
-		log.Fatalf("[-] Invalid port: %v", err)
+		return Credentials{}, fmt.Errorf("[-] Invalid port: %v", err)
 	}
 
 	return Credentials{
