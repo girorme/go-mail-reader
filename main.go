@@ -40,21 +40,64 @@ func getCredentials() (Credentials, error) {
 	}, nil
 }
 
+// ---------- Pool ----------
+type IMAPPool struct {
+	conns chan *imap.Dialer
+	newFn func() (*imap.Dialer, error)
+}
+
+func NewIMAPPool(size int, newFn func() (*imap.Dialer, error)) (*IMAPPool, error) {
+	pool := &IMAPPool{
+		conns: make(chan *imap.Dialer, size),
+		newFn: newFn,
+	}
+
+	for i := 0; i < size; i++ {
+		conn, err := newFn()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create imap connection: %w", err)
+		}
+		if err := conn.SelectFolder("INBOX"); err != nil {
+			return nil, fmt.Errorf("failed to select folder: %w", err)
+		}
+		pool.conns <- conn
+	}
+
+	return pool, nil
+}
+
+func (p *IMAPPool) Get() *imap.Dialer {
+	return <-p.conns
+}
+
+func (p *IMAPPool) Put(conn *imap.Dialer) {
+	p.conns <- conn
+}
+
+func (p *IMAPPool) Close() {
+	close(p.conns)
+	for c := range p.conns {
+		c.Close()
+	}
+}
+
 func initImap() {
 	imap.Verbose = false
 	imap.RetryCount = 3
 }
 
-func readMails(im *imap.Dialer, uids []int) {
-	emails, err := im.GetEmails(uids...)
+func readMails(pool *IMAPPool, uids []int) {
+	// Fetch emails using one connection (not in parallel)
+	conn := pool.Get()
+	emails, err := conn.GetEmails(uids...)
+	pool.Put(conn)
+
 	if err != nil {
 		log.Fatalf("[-] Error getting emails: %v", err)
 	}
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	color.Green("[+] Reading an email chunk of %d UIDs\n", len(emails))
+	color.Green("[+] Reading async a email chunk of %d UIDs\n", len(emails))
 
 	for _, email := range emails {
 		wg.Add(1)
@@ -64,9 +107,11 @@ func readMails(im *imap.Dialer, uids []int) {
 
 			color.Cyan("[+] Reading email: %s", email.Subject)
 
-			mu.Lock()
-			if err := im.MarkSeen(email.UID); err != nil {
-				log.Fatalf("Error marking email as seen: %v", err)
+			conn := pool.Get()
+			defer pool.Put(conn)
+
+			if err := conn.MarkSeen(email.UID); err != nil {
+				log.Printf("Error marking email %d as seen: %v", email.UID, err)
 			}
 			mu.Unlock()
 		}(email)
@@ -89,27 +134,32 @@ func main() {
 
 	fmt.Printf("[+] Mail info: [%s] %s:*****\n", credentials.Server, credentials.Username)
 
-	im, err := imap.New(
-		credentials.Username,
-		credentials.Password,
-		credentials.Server,
-		credentials.Port,
-	)
+	newConn := func() (*imap.Dialer, error) {
+		im, err := imap.New(
+			credentials.Username,
+			credentials.Password,
+			credentials.Server,
+			credentials.Port,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return im, nil
+	}
+
+	// create pool with 5 connections
+	pool, err := NewIMAPPool(5, newConn)
 	if err != nil {
-		log.Fatalf("[-] Error creating imap client: %v", err)
+		log.Fatalf("[-] Error creating pool: %v", err)
 	}
+	defer pool.Close()
 
-	im.ReadOnly = true
-
-	defer im.Close()
-
-	fmt.Printf("[+] Selecting folder: INBOX\n")
-	if err := im.SelectFolder("INBOX"); err != nil {
-		log.Fatalf("[-] Error selecting folder: %v", err)
-	}
-
+	// use one connection to fetch unseen uids
+	conn := pool.Get()
 	fmt.Printf("[+] Getting UNSEEN uids\n\n")
-	uids, err := im.GetUIDs("UNSEEN")
+	uids, err := conn.GetUIDs("UNSEEN")
+	pool.Put(conn)
+
 	if err != nil {
 		log.Fatalf("Error getting uids: %v", err)
 	}
@@ -123,6 +173,6 @@ func main() {
 	flag.Parse()
 
 	for uidChunk := range slices.Chunk(uids, *chunkSize) {
-		readMails(im, uidChunk)
+		readMails(pool, uidChunk)
 	}
 }
