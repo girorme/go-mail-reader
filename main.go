@@ -113,7 +113,6 @@ func readMails(pool *IMAPPool, uids []int) {
 			if err := conn.MarkSeen(email.UID); err != nil {
 				log.Printf("Error marking email %d as seen: %v", email.UID, err)
 			}
-			mu.Unlock()
 		}(email)
 	}
 
