@@ -47,19 +47,54 @@ type IMAPPool struct {
 }
 
 func NewIMAPPool(size int, newFn func() (*imap.Dialer, error)) (*IMAPPool, error) {
+	if size <= 0 {
+		return nil, fmt.Errorf("pool size must be positive, got: %d", size)
+	}
+
 	pool := &IMAPPool{
 		conns: make(chan *imap.Dialer, size),
 		newFn: newFn,
 	}
 
+	// Create connections concurrently for faster startup
+	var wg sync.WaitGroup
+	errChan := make(chan error, size)
+	connChan := make(chan *imap.Dialer, size)
+
 	for i := 0; i < size; i++ {
-		conn, err := newFn()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create imap connection: %w", err)
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			conn, err := newFn()
+			if err != nil {
+				errChan <- fmt.Errorf("failed to create IMAP connection %d: %w", idx, err)
+				return
+			}
+			if err := conn.SelectFolder("INBOX"); err != nil {
+				conn.Close()
+				errChan <- fmt.Errorf("failed to select folder for connection %d: %w", idx, err)
+				return
+			}
+			connChan <- conn
+		}(i)
+	}
+
+	wg.Wait()
+	close(errChan)
+	close(connChan)
+
+	// Check for errors
+	if len(errChan) > 0 {
+		// Close any successful connections
+		for conn := range connChan {
+			conn.Close()
 		}
-		if err := conn.SelectFolder("INBOX"); err != nil {
-			return nil, fmt.Errorf("failed to select folder: %w", err)
-		}
+		// Return first error
+		return nil, <-errChan
+	}
+
+	// Add all connections to pool
+	for conn := range connChan {
 		pool.conns <- conn
 	}
 
@@ -87,7 +122,11 @@ func initImap() {
 }
 
 func readMails(pool *IMAPPool, uids []int) {
-	// Fetch emails using one connection (not in parallel)
+	if len(uids) == 0 {
+		return
+	}
+
+	// Fetch emails using one connection
 	conn := pool.Get()
 	emails, err := conn.GetEmails(uids...)
 	pool.Put(conn)
@@ -96,9 +135,10 @@ func readMails(pool *IMAPPool, uids []int) {
 		log.Fatalf("[-] Error getting emails: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	color.Green("[+] Reading async a email chunk of %d UIDs\n", len(emails))
+	color.Green("[+] Processing email chunk of %d UIDs\n", len(emails))
 
+	// Process emails concurrently with pool
+	var wg sync.WaitGroup
 	for _, email := range emails {
 		wg.Add(1)
 
@@ -107,11 +147,12 @@ func readMails(pool *IMAPPool, uids []int) {
 
 			color.Cyan("[+] Reading email: %s", email.Subject)
 
+			// Get connection from pool to mark as seen
 			conn := pool.Get()
 			defer pool.Put(conn)
 
 			if err := conn.MarkSeen(email.UID); err != nil {
-				log.Printf("Error marking email %d as seen: %v", email.UID, err)
+				log.Printf("[-] Error marking email %d as seen: %v", email.UID, err)
 			}
 		}(email)
 	}
@@ -120,8 +161,13 @@ func readMails(pool *IMAPPool, uids []int) {
 }
 
 func main() {
+	// Parse flags first
+	chunkSize := flag.Int("chunk-size", 10, "Size of email chunks to process")
+	poolSize := flag.Int("pool-size", 5, "Number of IMAP connections in the pool")
+	flag.Parse()
+
 	fmt.Println("Go mail reader")
-	color.Cyan("You can use -chunk-size <size> to change the size of email chunks to be read")
+	color.Cyan("Configuration: chunk-size=%d, pool-size=%d", *chunkSize, *poolSize)
 	fmt.Println("[+] Getting envs and preparing connection")
 
 	initImap()
@@ -146,32 +192,34 @@ func main() {
 		return im, nil
 	}
 
-	// create pool with 5 connections
-	pool, err := NewIMAPPool(5, newConn)
+	// Create pool with configurable size
+	pool, err := NewIMAPPool(*poolSize, newConn)
 	if err != nil {
 		log.Fatalf("[-] Error creating pool: %v", err)
 	}
 	defer pool.Close()
 
-	// use one connection to fetch unseen uids
+	// Use one connection to fetch unseen UIDs
 	conn := pool.Get()
-	fmt.Printf("[+] Getting UNSEEN uids\n\n")
+	fmt.Printf("[+] Getting UNSEEN UIDs\n\n")
 	uids, err := conn.GetUIDs("UNSEEN")
 	pool.Put(conn)
 
 	if err != nil {
-		log.Fatalf("Error getting uids: %v", err)
+		log.Fatalf("[-] Error getting UIDs: %v", err)
 	}
 
 	if len(uids) == 0 {
 		color.Yellow("[+] No unseen emails found\n")
-		os.Exit(0)
+		return
 	}
 
-	chunkSize := flag.Int("chunk-size", 10, "Size of email chunks to process")
-	flag.Parse()
+	color.Green("[+] Found %d unseen emails\n", len(uids))
 
+	// Process emails in chunks
 	for uidChunk := range slices.Chunk(uids, *chunkSize) {
 		readMails(pool, uidChunk)
 	}
+
+	color.Green("[+] All emails processed successfully\n")
 }
