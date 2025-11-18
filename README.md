@@ -227,7 +227,7 @@ Configuration: chunk-size=10, pool-size=5
 
 ## 🏗️ Architecture
 
-The application uses several Go best practices:
+The application uses some strategies and patterns:
 
 - **Connection Pooling**: Reusable IMAP connections for efficiency
 - **Concurrent Initialization**: Parallel connection setup for faster startup
