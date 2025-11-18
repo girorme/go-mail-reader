@@ -4,6 +4,7 @@ go 1.24.5
 
 require (
 	github.com/BrianLeishman/go-imap v0.1.12
+	github.com/fatih/color v1.18.0
 	github.com/joho/godotenv v1.5.1
 )
 
@@ -12,7 +13,6 @@ require (
 	github.com/cention-sany/utf7 v0.0.0-20170124080048-26cad61bd60a // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
-	github.com/fatih/color v1.18.0 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/jaytaylor/html2text v0.0.0-20211105163654-bc68cce691ba // indirect
 	github.com/jhillyerd/enmime v0.10.0 // indirect
